@@ -85,7 +85,7 @@ your-project-folder/
 
 1. The software requires Google Chrome. This has not been tested on Safari, Edge, Firefox, or Opera and other browsers.
 
-2. MIT License. Copyright (c) 2026 Ransom Turner. 
+2. MIT License. Copyright (c) 2026 carrot-man717. 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
