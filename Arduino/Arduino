@@ -1,0 +1,17 @@
+const int BUTTON_PIN = 7;
+int lastButtonState = HIGH; 
+
+void setup() {
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  Serial.begin(9600); 
+}
+
+void loop() {
+  int currentButtonState = digitalRead(BUTTON_PIN);
+
+  if (lastButtonState == HIGH && currentButtonState == LOW) {
+    Serial.println("DOOR_OPENED"); 
+    delay(300); 
+  }
+  lastButtonState = currentButtonState;
+}
