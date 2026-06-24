@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Room Alarm System</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background-color: #111;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    margin: 0;
+    overflow: hidden;
+    transition: background-color 0.5s ease;
+}
+
+#status {
+    font-size: 32px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    margin-bottom: 20px;
+    text-align: center;
+    color: #00ff00;
+}
+
+#inputArea {
+    display: block;
+    margin-bottom: 20px;
+}
+
+input {
+    padding: 15px 25px;
+    font-size: 22px;
+    text-align: center;
+    background: #222;
+    border: 2px solid #00ff00;
+    color: #fff;
+    border-radius: 5px;
+    outline: none;
+    letter-spacing: 5px;
+}
+
+#connectBtn {
+    padding: 10px 20px;
+    font-size: 16px;
+    background-color: #333;
+    color: #00ff00;
+    border: 1px solid #00ff00;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+#connectBtn:hover {
+    background-color: #00ff00;
+    color: #111;
+}
+
+@keyframes alarmFlash {
+    0% { background-color: #ff0000; }
+    50% { background-color: #0000ff; }
+    100% { background-color: #ff0000; }
+}
+
+.triggered {
+    animation: alarmFlash 0.1s infinite; 
+}
+
+.triggered #status {
+    color: #fff !important;
+}
+</style>
+</head>
+<body>
+
+    <!-- System Status Dashboard -->
+    <div id="status">SECURITY SYSTEM ARMED</div>
+    
+    <!-- Code Input Box -->
+    <div id="inputArea">
+        <input type="password" id="codeInput" placeholder="ENTER PIN TO DEACTIVATE" autocomplete="off" maxlength="4">
+    </div>
+
+    <!-- Web Serial API Hardware Connector Button -->
+    <button id="connectBtn" onclick="connectArduino()">CONNECT DOOR SENSOR</button>
+<script>
+// Configuration
+const SECRET_CODE = "9023"; 
+let loopCount = 0;
+let wrongAttempts = 0; 
+let isStarted = false;
+let alarmAverted = false;
+let isChaosActive = false; 
+
+// Track simultaneous keys for the secret bypass combination
+let activeKeys = {};
+
+// Audio File Configurations
+let primaryAudio = new Audio('start_sound.wav');
+const chaosFiles = [
+    'sound_1.mp3', 'sound_2.mp3', 'sound_3.wav', 
+    'sound_4.wav', 'sound_5.mp3', 'sound_6.mp3', 'sound_7.mp3'
+];
+let chaosAudios = [];
+
+// 1. Secret Panic Disarm Combination Tracker (Ctrl + S + A + F + E)
+window.addEventListener('keydown', function(e) {
+    let keyName = e.key.toLowerCase();
+    activeKeys[keyName] = true;
+    if (e.ctrlKey) activeKeys['control'] = true;
+
+    // Only intercept browser commands if full chaos is active
+    if (isChaosActive && activeKeys['control'] && (keyName === 's' || keyName === 'a' || keyName === 'f' || keyName === 'e')) {
+        e.preventDefault();
+    }
+
+    // Trigger deactivation ONLY if chaos mode is currently blasting
+    if (isChaosActive && activeKeys['control'] && activeKeys['s'] && activeKeys['a'] && activeKeys['f'] && activeKeys['e']) {
+        if (!alarmAverted) {
+            alarmAverted = true;
+            stopAllAudio();
+        }
+    }
+});
+
+// Clear keys out of the tracking map when buttons are released
+window.addEventListener('keyup', function(e) {
+    let keyName = e.key.toLowerCase();
+    delete activeKeys[keyName];
+    if (!e.ctrlKey) delete activeKeys['control'];
+});
+
+// 2. Standard Keypad PIN Input Scanner
+document.getElementById('codeInput').addEventListener('input', function(e) {
+    if (!isStarted || alarmAverted || isChaosActive) return;
+    
+    let currentInput = e.target.value;
+
+    // Evaluate exactly when 4 digits are submitted
+    if (currentInput.length === 4) {
+        if (currentInput === SECRET_CODE) {
+            alarmAverted = true;
+            stopAllAudio();
+        } else {
+            wrongAttempts++;
+            
+            // Instantly detonate alarm if she hits 3 strikes
+            if (wrongAttempts >= 3) {
+                triggerFullChaos();
+            } else {
+                e.target.value = ""; 
+                document.getElementById('status').innerText = `WRONG CODE! Strike ${wrongAttempts} of 3`;
+                document.getElementById('status').style.color = "#ff0000";
+            }
+        }
+    }
+});
+
+// 3. Web Serial Pipeline (Reads your Arduino Uno via USB)
+async function connectArduino() {
+    try {
+        const port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+        
+        document.getElementById('connectBtn').innerText = "SENSOR LINKED & READY";
+        document.getElementById('connectBtn').style.color = "#aaa";
+        document.getElementById('connectBtn').style.borderColor = "#aaa";
+        document.getElementById('connectBtn').disabled = true;
+
+        const textDecoder = new TextDecoderStream();
+        const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+        const reader = textDecoder.readable.getReader();
+        
+        let buffer = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) { reader.releaseLock(); break; }
+            
+            if (value) {
+                buffer += value;
+                if (buffer.includes("\n")) {
+                    let cleanMessage = buffer.trim(); 
+                    buffer = ""; 
+                    
+                    // Activate alarm sequence when "DOOR_OPENED" line arrives from Arduino
+                    if (cleanMessage.includes("DOOR_OPENED") && !isStarted) {
+                        initiateAlarmSequence();
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        alert("Serial Connection Failed. Make sure the Web Editor Serial Monitor is closed.");
+        console.error(error);
+    }
+}
+
+// 4. Warning Countdown Audio Loop Manager
+function handleAudioLoop() {
+    if (alarmAverted) return;
+
+    loopCount++;
+    if (loopCount < 3) {
+        document.getElementById('status').style.color = "#ffcc00"; 
+        document.getElementById('status').innerText = `WARNING: INTRUDER DETECTED! (Loop ${loopCount + 1} of 3)`;
+        primaryAudio.currentTime = 0;
+        primaryAudio.play();
+    } else {
+        triggerFullChaos();
+    }
+}
+
+function initiateAlarmSequence() {
+    isStarted = true;
+    alarmAverted = false;
+    loopCount = 0;
+    wrongAttempts = 0;
+
+    document.getElementById('codeInput').value = "";
+    document.getElementById('inputArea').style.display = 'block'; 
+    document.getElementById('codeInput').focus();
+
+    document.getElementById('status').innerText = "WARNING: INTRUDER DETECTED! (Loop 1 of 3)";
+    document.getElementById('status').style.color = "#ffcc00"; 
+    document.getElementById('codeInput').style.borderColor = "#ffcc00";
+    document.getElementById('connectBtn').style.display = 'none';
+
+    primaryAudio.addEventListener('ended', handleAudioLoop);
+    primaryAudio.play().catch(err => {
+        document.getElementById('status').innerText = "AUDIO ERROR: Check file paths";
+        console.log(err);
+    });
+}
+
+// 5. Lockdown Chaos Mode Execution
+function triggerFullChaos() {
+    if (alarmAverted) return;
+
+    isChaosActive = true; 
+    document.body.style.cursor = 'none'; // Invisible mouse pointer
+    document.getElementById('status').innerText = "ALARM BREACHED - LOCKDOWN ACTIVE";
+    document.body.classList.add('triggered'); // Activates visual strobe stylesheet animation
+    document.getElementById('inputArea').style.display = 'none'; 
+
+    // Kill primary sound completely
+    primaryAudio.removeEventListener('ended', handleAudioLoop);
+    primaryAudio.pause();
+    primaryAudio.currentTime = 0;
+
+    // Load and launch all 7 chaos sounds maxed out and looping
+    chaosFiles.forEach(file => {
+        let audio = new Audio(file);
+        audio.loop = true;
+        audio.volume = 1.0; 
+        chaosAudios.push(audio);
+        audio.play().catch(err => console.log("Playback error: " + file, err));
+    });
+}
+
+// 6. Audio Deactivation and Reset Engine
+function stopAllAudio() {
+    isChaosActive = false; 
+    document.body.style.cursor = 'default';
+    document.body.classList.remove('triggered');
+    document.body.style.backgroundColor = "#005500"; 
+    document.getElementById('status').innerText = "ACCESS GRANTED - ALARM DEACTIVATED";
+    document.getElementById('status').style.color = "#00ff00";
+    document.getElementById('inputArea').style.display = 'none';
+    
+    primaryAudio.removeEventListener('ended', handleAudioLoop);
+    primaryAudio.pause();
+    primaryAudio.currentTime = 0;
+
+    chaosAudios.forEach(audio => {
+        audio.pause();
+        audio.currentTime = 0;
+    });
+    chaosAudios = []; 
+
+    // Trigger the 10-Second Auto-Reset Timer
+    setTimeout(resetSystemToArmed, 10000);
+}
+
+function resetSystemToArmed() {
+    document.body.style.backgroundColor = "#111";
+    document.getElementById('status').innerText = "SECURITY SYSTEM ARMED";
+    document.getElementById('status').style.color = "#00ff00";
+    
+    document.getElementById('inputArea').style.display = 'block';
+    document.getElementById('codeInput').value = "";
+    document.getElementById('codeInput').style.borderColor = "#00ff00";
+
+    // Open structural variables back up for the next sensor trigger
+    isStarted = false;
+    alarmAverted = false;
+    isChaosActive = false;
+    loopCount = 0;
+    wrongAttempts = 0;
+}
+
+</script>
+
+</body>
+</html>
